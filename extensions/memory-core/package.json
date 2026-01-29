@@ -1,0 +1,17 @@
+{
+  "name": "@clawbot/memory-core",
+  "version": "2026.1.27-beta.1",
+  "type": "module",
+  "description": "clawbot core memory search plugin",
+  "clawbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "clawbot": ">=2026.1.26"
+  },
+  "devDependencies": {
+    "clawbot": "workspace:*"
+  }
+}

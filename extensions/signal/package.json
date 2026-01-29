@@ -1,0 +1,11 @@
+{
+  "name": "@clawbot/signal",
+  "version": "2026.1.27-beta.1",
+  "type": "module",
+  "description": "clawbot Signal channel plugin",
+  "clawbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

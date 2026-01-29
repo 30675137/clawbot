@@ -1,0 +1,11 @@
+{
+  "name": "@clawbot/google-gemini-cli-auth",
+  "version": "2026.1.27-beta.1",
+  "type": "module",
+  "description": "clawbot Gemini CLI OAuth provider plugin",
+  "clawbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

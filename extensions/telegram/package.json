@@ -1,0 +1,11 @@
+{
+  "name": "@clawbot/telegram",
+  "version": "2026.1.27-beta.1",
+  "type": "module",
+  "description": "clawbot Telegram channel plugin",
+  "clawbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

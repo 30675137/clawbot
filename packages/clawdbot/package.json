@@ -1,0 +1,16 @@
+{
+  "name": "clawbot",
+  "version": "2026.1.26",
+  "type": "module",
+  "description": "Compatibility shim that forwards to clawbot",
+  "exports": {
+    ".": "./index.js",
+    "./plugin-sdk": "./plugin-sdk/index.js"
+  },
+  "bin": {
+    "clawbot": "./bin/clawbot.js"
+  },
+  "dependencies": {
+    "clawbot": "workspace:*"
+  }
+}
