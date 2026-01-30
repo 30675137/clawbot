@@ -1,0 +1,11 @@
+{
+  "name": "@clawbot/lark",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "clawbot Lark/Feishu channel plugin",
+  "clawbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
