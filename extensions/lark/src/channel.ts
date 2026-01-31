@@ -1,4 +1,5 @@
-import type { ChannelPlugin } from "clawdbot/plugin-sdk";
+import type { ChannelPlugin, clawbotConfig } from "clawdbot/plugin-sdk";
+import { registerPluginHttpRoute } from "clawdbot/plugin-sdk";
 import type { LarkConfig } from "./types.js";
 import { validateCredentials, hasValidToken, getAccessToken } from "./auth.js";
 import { getLarkRuntime } from "./runtime.js";
@@ -6,6 +7,10 @@ import { handleWebhookRequest, type ParsedLarkMessage } from "./webhook.js";
 import { larkToInternal, internalToLark, splitLongMessage } from "./message.js";
 import { sendMessage, replyMessage, uploadImage, downloadResource, isSuccess, getErrorMessage } from "./api.js";
 import { formatImageContent } from "./message.js";
+import { createLarkReplyDispatcher } from "./reply-dispatcher.js";
+
+// Track registered webhook routes for cleanup
+const registeredRoutes = new Map<string, () => void>();
 
 // ============================================================================
 // Account Resolution Types
@@ -113,13 +118,43 @@ export const larkPlugin: ChannelPlugin<LarkAccount> = {
     },
 
     setAccountEnabled({ cfg, accountId, enabled }) {
-      const path = `${getConfigPath(accountId)}.enabled`;
-      return cfg.set(path, enabled);
+      const id = accountId ?? "default";
+      const currentAccounts = cfg.channels?.lark?.accounts ?? {};
+      const currentAccount = currentAccounts[id] as Record<string, unknown> | undefined;
+
+      return {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          lark: {
+            ...cfg.channels?.lark,
+            accounts: {
+              ...currentAccounts,
+              [id]: {
+                ...currentAccount,
+                enabled,
+              },
+            },
+          },
+        },
+      };
     },
 
     deleteAccount({ cfg, accountId }) {
-      const path = getConfigPath(accountId);
-      return cfg.delete(path);
+      const id = accountId ?? "default";
+      const currentAccounts = { ...(cfg.channels?.lark?.accounts ?? {}) };
+      delete currentAccounts[id];
+
+      return {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          lark: {
+            ...cfg.channels?.lark,
+            accounts: currentAccounts,
+          },
+        },
+      };
     },
 
     describeAccount(account, cfg) {
@@ -148,11 +183,12 @@ export const larkPlugin: ChannelPlugin<LarkAccount> = {
     },
 
     applyAccountConfig({ cfg, accountId, input }) {
-      const path = getConfigPath(accountId);
-      const current = cfg.get(path) as Record<string, unknown> | undefined;
+      const id = accountId ?? "default";
+      const currentAccounts = cfg.channels?.lark?.accounts ?? {};
+      const currentAccount = currentAccounts[id] as Record<string, unknown> | undefined;
 
-      const updated = {
-        ...current,
+      const updated: Record<string, unknown> = {
+        ...currentAccount,
         enabled: true,
       };
 
@@ -166,7 +202,19 @@ export const larkPlugin: ChannelPlugin<LarkAccount> = {
         }
       }
 
-      return cfg.set(path, updated);
+      return {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          lark: {
+            ...cfg.channels?.lark,
+            accounts: {
+              ...currentAccounts,
+              [id]: updated,
+            },
+          },
+        },
+      };
     },
   },
 
@@ -240,8 +288,8 @@ export const larkPlugin: ChannelPlugin<LarkAccount> = {
 
     async configure({ cfg, prompter, accountOverrides }) {
       const accountId = accountOverrides.lark ?? "default";
-      const path = getConfigPath(accountId);
-      const current = cfg.get(path) as Record<string, unknown> | undefined;
+      const currentAccounts = cfg.channels?.lark?.accounts ?? {};
+      const current = currentAccounts[accountId] as Record<string, unknown> | undefined;
 
       // Prompt for App ID
       const appId = await prompter.text({
@@ -339,7 +387,19 @@ export const larkPlugin: ChannelPlugin<LarkAccount> = {
       if (encryptKey) newConfig.encryptKey = encryptKey;
       if (verificationToken) newConfig.verificationToken = verificationToken;
 
-      const updatedCfg = cfg.set(path, newConfig);
+      const updatedCfg = {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          lark: {
+            ...cfg.channels?.lark,
+            accounts: {
+              ...currentAccounts,
+              [accountId]: newConfig,
+            },
+          },
+        },
+      };
 
       prompter.note(
         `Lark channel configured successfully!\n\n` +
@@ -361,11 +421,13 @@ export const larkPlugin: ChannelPlugin<LarkAccount> = {
 
   security: {
     resolveDmPolicy({ cfg, accountId }) {
-      const policyPath = `channels.lark.accounts.${accountId ?? "default"}.dmPolicy`;
-      const allowFromPath = `channels.lark.accounts.${accountId ?? "default"}.allowFrom`;
+      const id = accountId ?? "default";
+      const accountConfig = cfg.channels?.lark?.accounts?.[id] as Record<string, unknown> | undefined;
+      const policyPath = `channels.lark.accounts.${id}.dmPolicy`;
+      const allowFromPath = `channels.lark.accounts.${id}.allowFrom`;
 
       return {
-        policy: (cfg.get(policyPath) as string) ?? "allowlist",
+        policy: (accountConfig?.dmPolicy as string) ?? "allowlist",
         policyPath,
         allowFromPath,
         approveHint: "Add user's open_id to the allowlist",
@@ -380,8 +442,9 @@ export const larkPlugin: ChannelPlugin<LarkAccount> = {
   groups: {
     resolveRequireMention({ cfg, accountId, groupId }) {
       // Check if require mention is configured for this account
-      const requireMentionPath = `channels.lark.accounts.${accountId ?? "default"}.requireMention`;
-      const requireMention = cfg.get(requireMentionPath);
+      const id = accountId ?? "default";
+      const accountConfig = cfg.channels?.lark?.accounts?.[id] as Record<string, unknown> | undefined;
+      const requireMention = accountConfig?.requireMention;
 
       // Default to true for groups (only respond when @mentioned)
       if (requireMention === undefined) {
@@ -420,7 +483,7 @@ export const larkPlugin: ChannelPlugin<LarkAccount> = {
 
   gateway: {
     async startAccount(ctx) {
-      const { account, runtime, log, setStatus, getStatus } = ctx;
+      const { account, runtime, log, setStatus, getStatus, cfg } = ctx;
 
       if (!account.appId || !account.appSecret) {
         log?.error("[lark] Cannot start: missing credentials");
@@ -456,19 +519,68 @@ export const larkPlugin: ChannelPlugin<LarkAccount> = {
               lastInboundAt: Date.now(),
             });
 
-            // Route to runtime for processing
-            // The runtime will handle the message and call outbound.send for replies
-            await runtime.handleInboundMessage?.({
-              channel: "lark",
-              accountId: account.accountId,
-              chatId: internalMsg.chatId,
-              chatType: internalMsg.chatType,
-              senderId: internalMsg.senderId,
-              text: internalMsg.text,
-              messageId: internalMsg.id,
-              replyToId: internalMsg.replyToId,
-              raw: message,
+            // Get runtime for auto-reply
+            const core = getLarkRuntime();
+
+            // Determine chat type
+            const isDirectMessage = message.chatType === "p2p";
+            const chatType = isDirectMessage ? "direct" : "group";
+
+            // Build inbound context for auto-reply system
+            const ctxPayload = core.channel.reply.finalizeInboundContext({
+              Body: internalMsg.text || "",
+              RawBody: internalMsg.text || "",
+              CommandBody: internalMsg.text || "",
+              From: message.chatId,
+              To: account.accountId,
+              SessionKey: `lark:${account.accountId}:${message.chatId}`,
+              AccountId: account.accountId,
+              ChatType: chatType,
+              ConversationLabel: message.chatId,
+              GroupSubject: !isDirectMessage ? message.chatId : undefined,
+              SenderName: message.senderId,
+              SenderId: message.senderId,
+              Provider: "lark" as const,
+              Surface: "lark" as const,
+              MessageSid: message.messageId,
+              Timestamp: Date.now(),
+              WasMentioned: !isDirectMessage && (message.mentions?.some(m => m.id?.user_id === "all" || m.name === "@_all") ?? false),
+              CommandAuthorized: true,
+              OriginatingChannel: "lark" as const,
+              OriginatingTo: account.accountId,
             });
+
+            // Create reply dispatcher
+            const { dispatcher, replyOptions, markDispatchIdle } = createLarkReplyDispatcher({
+              cfg,
+              larkConfig: config,
+              agentId: "main",
+              runtime: runtime as any,
+              log: {
+                info: (msg, meta) => log?.info(msg, meta),
+                error: (msg, meta) => log?.error(msg, meta),
+                debug: (msg, meta) => log?.info(msg, meta),
+              },
+              chatId: message.chatId,
+              messageId: message.messageId,
+            });
+
+            log?.info(`[lark] Dispatching to agent for session ${ctxPayload.SessionKey}`);
+
+            try {
+              const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
+                ctx: ctxPayload,
+                cfg,
+                dispatcher,
+                replyOptions,
+              });
+
+              markDispatchIdle();
+              log?.info(`[lark] Dispatch complete: queuedFinal=${queuedFinal}, counts=${JSON.stringify(counts)}`);
+            } catch (err) {
+              log?.error(`[lark] Dispatch failed: ${err}`);
+              markDispatchIdle();
+            }
           },
           async onUnsupportedMessage(message: ParsedLarkMessage, replyText: string) {
             log?.warn(`[lark] Unsupported message type: ${message.messageType}`);
@@ -489,8 +601,48 @@ export const larkPlugin: ChannelPlugin<LarkAccount> = {
         });
       };
 
-      // Register with runtime's HTTP server
-      runtime.registerWebhook?.("lark", account.accountId, webhookPath, handler);
+      // Register webhook route using plugin HTTP registry
+      const routeKey = `lark:${account.accountId}`;
+      const unregister = registerPluginHttpRoute({
+        path: webhookPath,
+        pluginId: "lark",
+        accountId: account.accountId,
+        log: (msg) => log?.info(msg),
+        handler: async (req, res) => {
+          try {
+            log?.info(`[lark] Webhook request received from ${req.headers['x-forwarded-for'] || req.socket?.remoteAddress}`);
+
+            // Read request body as string
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) {
+              chunks.push(chunk as Buffer);
+            }
+            const rawBody = Buffer.concat(chunks).toString("utf-8");
+
+            log?.info(`[lark] Webhook body: ${rawBody.substring(0, 200)}...`);
+
+            // Extract headers
+            const headers: Record<string, string | undefined> = {};
+            for (const [key, value] of Object.entries(req.headers)) {
+              headers[key.toLowerCase()] = Array.isArray(value) ? value[0] : value;
+            }
+
+            // Process webhook (handler expects { body, headers })
+            const response = await handler({ body: rawBody, headers });
+
+            // Send response - return body directly for Lark compatibility
+            res.statusCode = response.status;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(response.body));
+          } catch (error) {
+            log?.error(`[lark] Webhook handler error: ${error}`);
+            res.statusCode = 500;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: "Internal server error" }));
+          }
+        },
+      });
+      registeredRoutes.set(routeKey, unregister);
 
       setStatus({
         ...getStatus(),
@@ -504,10 +656,15 @@ export const larkPlugin: ChannelPlugin<LarkAccount> = {
     },
 
     async stopAccount(ctx) {
-      const { account, runtime, log, setStatus, getStatus } = ctx;
+      const { account, log, setStatus, getStatus } = ctx;
 
-      // Unregister webhook
-      runtime.unregisterWebhook?.("lark", account.accountId);
+      // Unregister webhook route
+      const routeKey = `lark:${account.accountId}`;
+      const unregister = registeredRoutes.get(routeKey);
+      if (unregister) {
+        unregister();
+        registeredRoutes.delete(routeKey);
+      }
 
       setStatus({
         ...getStatus(),

@@ -13,7 +13,22 @@ Clawbot 飞书消息渠道插件，支持通过飞书机器人收发消息。
 
 ## 快速开始
 
-### 1. 创建飞书应用
+### 1. 安装插件
+
+```bash
+# 进入 clawbot 扩展目录
+mkdir -p ~/.clawdbot/extensions
+cd ~/.clawdbot/extensions
+
+# 复制插件（从源码目录）
+cp -r /path/to/clawbot/extensions/lark ./lark
+
+# 安装依赖
+cd lark
+npm install --omit=dev
+```
+
+### 2. 创建飞书应用
 
 1. 访问 [飞书开放平台](https://open.feishu.cn/)
 2. 创建企业自建应用
@@ -25,6 +40,8 @@ Clawbot 飞书消息渠道插件，支持通过飞书机器人收发消息。
 
 ### 2. 配置 Clawbot
 
+**方式一：交互式配置**
+
 ```bash
 clawbot setup lark
 ```
@@ -34,6 +51,33 @@ clawbot setup lark
 - App Secret
 - (可选) Encrypt Key (32字符)
 - (可选) Verification Token
+
+**方式二：手动配置**
+
+编辑 `~/.clawdbot/clawdbot.json`：
+
+```json
+{
+  "channels": {
+    "lark": {
+      "accounts": {
+        "default": {
+          "appId": "cli_xxxxxxxxxx",
+          "appSecret": "your-app-secret-here",
+          "enabled": true
+        }
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "lark": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
 
 ### 3. 配置 Webhook
 
